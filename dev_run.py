@@ -62,8 +62,8 @@ def cmd_predict():
 
     dates = []
     for e in evidences:
-        d = solution.resolve_fields(e).get("arrival_date", (None,))[0]
-        if d:
+        d, score = solution.resolve_fields(e).get("arrival_date", (None, 0))[:2]
+        if d and score >= 0.9:
             dates.append(d)
     cutoff = solution.batch_stale_cutoff(dates)
     print("stale cutoff:", cutoff)

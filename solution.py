@@ -606,15 +606,21 @@ def scan_line_values(lines):
                 if v:
                     found.append(("fee_status", v, r * 0.9))
         if re.search(r"d[il1]p\s?[-–—]?\s?wa[il1]ver|hardship", lo):
-            found.append(("fee_hint_zero", "waived", 0.45))
+            found.append(("dip_waiver", "waived", 0.9))
         if re.search(r"\$\s?0[.,]00", line):
             found.append(("fee_hint_zero", "waived", 0.4))
         if re.search(r"\$\s?\d{3}[.,]\d{2}", line):
             found.append(("fee_hint_amount", "paid", 0.4))
-        # risk flag tokens anywhere
+        # risk flag tokens anywhere (also as OCR-split two-word forms)
         for tok in tokens:
             if len(tok) >= 9:
                 v, r = fuzzy_best(tok.lower(), RISK_FLAG_VALUES[:-1], 0.78)
+                if v:
+                    found.append(("flag_token", v, r))
+        for i in range(len(tokens) - 1):
+            two = (tokens[i] + "_" + tokens[i + 1]).lower()
+            if len(two) >= 11:
+                v, r = fuzzy_best(two, RISK_FLAG_VALUES[:-1], 0.8)
                 if v:
                     found.append(("flag_token", v, r))
         # registry status
@@ -829,7 +835,7 @@ def enrich_page(page_info):
                 page_info["doc_type"] = dt
     for field, value, score in scan_line_values(lines):
         if field in ("fee_hint_zero", "fee_hint_amount", "flag_token",
-                     "registry_status"):
+                     "registry_status", "dip_waiver"):
             if field == "flag_token":
                 extras.setdefault("flag_tokens", [])
                 if value not in extras["flag_tokens"]:
@@ -1111,6 +1117,20 @@ def batch_stale_cutoff(dates):
     return (newest - datetime.timedelta(days=183)).isoformat()
 
 
+def has_dip_waiver(evidence):
+    """Visible DIP-WAIVER / hardship waiver code anywhere in the packet.
+
+    On training receipts a visible waiver code implies fee 'waived' even when
+    the printed fee status disagrees (105/105)."""
+    for page in evidence["pages"]:
+        if page.get("extras", {}).get("dip_waiver"):
+            return True
+        wc = page.get("fields", {}).get("waiver_code")
+        if wc and "waiver" in str(wc[0]).lower():
+            return True
+    return False
+
+
 def revoked_sponsor_evidence(evidence, merged):
     """Return a revoked sponsor id only when we trust the read."""
     hits = []
@@ -1178,9 +1198,11 @@ def adjudicate(evidence, merged, stale_cutoff=DEFAULT_STALE_CUTOFF):
         return "DENIED", flags, "sponsor_notice"
     if visa == "TRANSIT-7":
         return "DENIED", flags, "transit_visa"
-    if fee_explicit == "unpaid":
+    if fee_explicit == "unpaid" and not has_dip_waiver(evidence):
         return "DENIED", flags, "unpaid_fee"
-    if arrival and arrival < stale_cutoff and visa != "DIP-1":
+    arrival_score = merged.get("arrival_date", (None, 0))[1]
+    if (arrival and arrival < stale_cutoff and visa != "DIP-1"
+            and arrival_score >= 0.7):
         return "DENIED", flags, "stale_arrival"
     if fee_explicit == "unknown":
         return "NEEDS_REVIEW", flags, "fee_unknown_explicit"
@@ -1201,21 +1223,42 @@ def adjudicate(evidence, merged, stale_cutoff=DEFAULT_STALE_CUTOFF):
     return "APPROVED", flags, "clean"
 
 
-# confidence = smoothed per-path accuracy measured on the training dev split
+def confidence_bucket(evidence, merged, path):
+    """Refine the decision path into a calibration bucket."""
+    if path == "note_finding":
+        for page in evidence["pages"]:
+            v = page.get("fields", {}).get("finding")
+            if v and not page.get("scanned"):
+                return "note_finding_text"
+        return "note_finding_scan"
+    if path == "clean":
+        key_fields = ["applicant_name", "species_code", "home_world",
+                      "visa_class", "sponsor_id", "arrival_date"]
+        strong = sum(1 for f in key_fields
+                     if merged.get(f, (None, 0))[1] >= 0.95)
+        return "clean_strong" if strong >= 5 else "clean_weak"
+    return path
+
+
+# confidence = smoothed per-bucket accuracy measured on the training dev split
 CONFIDENCE_BY_PATH = {
+    "note_finding_text": 0.99,
+    "note_finding_scan": 0.97,
+    "clean_strong": 0.61,
+    "clean_weak": 0.50,
     "note_finding": 0.98,
     "clean": 0.59,
-    "damaged_packet": 0.35,
+    "damaged_packet": 0.31,
     "disqualifying_flag": 0.97,
-    "review_flags": 0.79,
-    "transit_visa": 0.86,
+    "review_flags": 0.77,
+    "transit_visa": 0.85,
     "revoked_sponsor": 0.74,
-    "unpaid_fee": 0.87,
-    "fee_unknown_explicit": 0.92,
+    "unpaid_fee": 0.88,
+    "fee_unknown_explicit": 0.94,
     "stale_arrival": 0.88,
-    "approved_stamp": 0.85,
+    "approved_stamp": 0.8,
     "sponsor_blank": 0.5,
-    "denied_stamp": 0.85,
+    "denied_stamp": 0.8,
     "rescinded_denial": 0.7,
     "sponsor_notice": 0.8,
     "review_stamp": 0.9,
@@ -1231,6 +1274,8 @@ def build_record(evidence, stale_cutoff=DEFAULT_STALE_CUTOFF):
         return merged.get(f, (default,))[0] or default
 
     fee = merged.get("fee_status", (None,))[0]
+    if has_dip_waiver(evidence):
+        fee = "waived"
     if not fee:
         hint = None
         for page in evidence["pages"]:
@@ -1243,6 +1288,7 @@ def build_record(evidence, stale_cutoff=DEFAULT_STALE_CUTOFF):
         # imputation affects only the extraction field, never the decision
         fee = hint or "paid"
 
+    bucket = confidence_bucket(evidence, merged, path)
     record = {
         "case_id": evidence["case_id"],
         "applicant_name": get("applicant_name", "unknown"),
@@ -1255,9 +1301,9 @@ def build_record(evidence, stale_cutoff=DEFAULT_STALE_CUTOFF):
         "risk_flags": "|".join(sorted(flags)) if flags else "none",
         "fee_status": fee,
         "adjudication": adjudication,
-        "confidence": CONFIDENCE_BY_PATH.get(path, 0.5),
+        "confidence": CONFIDENCE_BY_PATH.get(bucket, CONFIDENCE_BY_PATH.get(path, 0.5)),
     }
-    return record, path
+    return record, bucket
 
 
 def _worker(pdf_path):
@@ -1279,8 +1325,8 @@ def main(input_dir, output_path):
     dates = []
     for evidence in evidences:
         merged = resolve_fields(evidence)
-        d = merged.get("arrival_date", (None,))[0]
-        if d:
+        d, score = merged.get("arrival_date", (None, 0))[:2]
+        if d and score >= 0.9:
             dates.append(d)
     cutoff = batch_stale_cutoff(dates)
 
