@@ -1,0 +1,14 @@
+{
+  "goal": "Maximize official MIB doc challenge deterministic score (target 150/150)",
+  "metric": "dev_score",
+  "metric_direction": "higher",
+  "secondary_metrics": ["holdout_score", "holdout_fa"],
+  "selection_policy": "Keep decisions use dev_score (rules tuned on dev 70%). holdout_score is the honest ensemble report (dev-trained hybrid model, untouched 30%); consulted as guard only — a keep that tanks holdout by >1.0 is reverted as overfit.",
+  "run_command": "bash exp_run.sh",
+  "modifiable_files": ["solution.py"],
+  "readonly_files": ["dev_run.py", "hybrid/", "models/", "exp_run.sh"],
+  "timeout_seconds": 900,
+  "tag": "jul26-mib",
+  "no_new_dependencies": true,
+  "notes": "Evaluation is cache-based (cache/evidence2 OCR lines re-enriched at predict time). Changes to extract-time OCR code need targeted re-extraction and a dedicated experiment protocol; prefer predict-time logic (parsing, resolution, flags, adjudication, calibration)."
+}
