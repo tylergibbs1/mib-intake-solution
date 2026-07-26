@@ -1052,7 +1052,7 @@ def case_features(evidence):
         extras = page.get("extras", {})
         for tok in extras.get("flag_tokens", []):
             feats["flag_tokens"].add(tok)
-        if extras.get("registry_status"):
+        if extras.get("registry_status") and dt == "registry":
             feats["registry_embargo"] = True
         if extras.get("fee_hint_amount") and not feats["fee_hint"]:
             feats["fee_hint"] = "paid"
