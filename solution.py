@@ -487,7 +487,7 @@ def clean_field_values(pairs, page_case_id=None):
             v, r = fuzzy_best(raw, PURPOSES, 0.45)
             put(field, v, r)
         elif field == "fee_status":
-            v, r = fuzzy_best(raw, FEE_VALUES, 0.6)
+            v, r = fuzzy_best(raw, FEE_VALUES, 0.7)
             put(field, v, r)
         elif field == "observed_flags":
             flags = []
@@ -602,7 +602,7 @@ def scan_line_values(lines):
                 if tok in ("fee", "status", "case", "receipt", "amount",
                            "waiver", "code", "mib"):
                     continue
-                v, r = fuzzy_best(tok, FEE_VALUES, 0.72)
+                v, r = fuzzy_best(tok, FEE_VALUES, 0.8)
                 if v:
                     found.append(("fee_status", v, r * 0.9))
         if re.search(r"d[il1]p\s?[-–—]?\s?wa[il1]ver|hardship", lo):
