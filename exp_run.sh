@@ -11,25 +11,34 @@ DEV=$($PY dev_run.py score dev 2>>run.log | awk '/Deterministic score/ {print $3
 DEVFA=$($PY dev_run.py score dev 2>>run.log | awk '/Catastrophic/ {print $4}')
 
 $PY - >> run.log 2>&1 <<'EOF'
-import json
+import csv, json, sys
+import joblib
+import numpy as np
+sys.path.insert(0, '/Users/tylergibbs/Projects/8090chalfable/solution')
+import solution
+BASE = '/Users/tylergibbs/Projects/8090chalfable'
 mine = {}
-for line in open('/Users/tylergibbs/Projects/8090chalfable/cache/predictions.jsonl'):
+for line in open(f'{BASE}/cache/predictions.jsonl'):
     r = json.loads(line)
     mine[r['case_id']] = r
-theirs = {}
-for line in open('/Users/tylergibbs/Projects/8090chalfable/cache/other_holdout.jsonl'):
-    r = json.loads(line)
-    theirs[r['case_id']] = r
-DELEGATE = {'clean_strong', 'clean_weak', 'damaged_packet', 'sponsor_blank'}
+truth = sorted(r['case_id'] for r in csv.DictReader(open(f'{BASE}/mib-doc-challenge/data/train_labels.csv')))
+hold = [cid for i, cid in enumerate(truth) if i % 10 >= 7]
+bundle = joblib.load(f'{BASE}/solution/models/graybox.joblib')
+model, classes = bundle['model'], list(bundle['classes'])
 out = []
-for cid, t in theirs.items():
+for cid in hold:
     m = dict(mine[cid])
-    if m.get('_path') in DELEGATE:
-        m['adjudication'] = t['adjudication']
-        m['confidence'] = t['confidence']
+    if m.get('_path') in solution.DELEGATED_BUCKETS:
+        e = json.loads(open(f'{BASE}/cache/evidence2/{cid}.json').read())
+        for p in e['pages']:
+            solution.enrich_page(p)
+        probs = model.predict_proba(np.array([solution.graybox_vector(e)]))[0]
+        adj, conf = solution.graybox_decide(probs, classes)
+        m['adjudication'] = adj
+        m['confidence'] = conf
     m.pop('_path', None)
     out.append(m)
-with open('/Users/tylergibbs/Projects/8090chalfable/cache/ensemble_holdout.jsonl', 'w') as f:
+with open(f'{BASE}/cache/ensemble_holdout.jsonl', 'w') as f:
     for r in out:
         f.write(json.dumps(r) + '\n')
 EOF

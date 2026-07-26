@@ -1319,48 +1319,94 @@ def _worker(pdf_path):
 
 
 # Buckets where the rule engine's measured dev-split accuracy is too low to
-# trust; these cases are delegated to the hybrid statistical engine, which
-# generalizes better in that gray zone (ensemble validated on a train holdout).
+# trust; these cases are re-decided by a small ExtraTrees model over the rule
+# engine's own resolved fields and damage features (validated on a train
+# holdout against both the rules and a heavier hybrid OCR+ML engine).
 DELEGATED_BUCKETS = {"clean_strong", "clean_weak", "damaged_packet",
                      "sponsor_blank"}
 
+GRAYBOX_FEATURE_FIELDS = {
+    "species_code": SPECIES,
+    "home_world": HOME_WORLDS,
+    "visa_class": VISA_CLASSES,
+    "declared_purpose": PURPOSES,
+    "fee_status": FEE_VALUES,
+}
 
-def _hybrid_worker(pdf_path):
-    from hybrid.pdf import safe_extract_pdf
-    try:
-        return safe_extract_pdf(Path(pdf_path))
-    except Exception:
-        return None
+
+def graybox_vector(evidence):
+    """Feature vector for the gray-zone model, from resolved evidence."""
+    merged = resolve_fields(evidence)
+    feats = case_features(evidence)
+    flags = compute_flags(evidence, merged, feats)
+    vec = []
+    for f, vocab in GRAYBOX_FEATURE_FIELDS.items():
+        v = merged.get(f, (None,))[0]
+        vec.extend(1.0 if v == c else 0.0 for c in vocab)
+        vec.append(1.0 if v is None else 0.0)
+        vec.append(merged.get(f, (None, 0))[1])
+    for f in ("applicant_name", "sponsor_id", "arrival_date"):
+        vec.append(1.0 if f in merged else 0.0)
+        vec.append(merged.get(f, (None, 0))[1])
+    vec.append(1.0 if evidence.get("injection") else 0.0)
+    vec.append(float(len(evidence["pages"])))
+    vec.append(float(feats["scanned_pages"]))
+    vec.append(float(feats["damaged_pages"]))
+    vec.append(float(len(flags)))
+    for fl in RISK_FLAG_VALUES[:-1]:
+        vec.append(1.0 if fl in flags else 0.0)
+    kinds = {p.get("doc_type") for p in evidence["pages"]}
+    for dt in ("intake_form", "fee_receipt", "registry", "biometric",
+               "sponsor_letter", "adjudicator_note", None):
+        vec.append(1.0 if dt in kinds else 0.0)
+    for st in ("DENIED", "APPROVED", "REVIEW", "SAMPLE DENIAL"):
+        vec.append(1.0 if st in feats["stamps"] else 0.0)
+    bio = None
+    for p in evidence["pages"]:
+        b = p.get("fields", {}).get("biometric_confidence")
+        if b:
+            m = re.search(r"(\d+)", str(b[0]))
+            if m:
+                bio = int(m.group(1))
+    vec.append(float(bio) if bio is not None else -1.0)
+    return vec
 
 
-def apply_hybrid_delegation(results, workers):
-    """Override adjudication/confidence on delegated cases with the hybrid
-    ML engine's decision. Field extraction stays with the rule engine."""
-    delegated = [(i, pdf) for i, (pdf, record, bucket) in enumerate(results)
+def graybox_decide(probs, classes):
+    """Expected-value-optimal decision under the challenge scoring matrix."""
+    P = {c: float(p) for c, p in zip(classes, probs)}
+    ev = {
+        "APPROVED": 8 * P["APPROVED"] + P["NEEDS_REVIEW"] - 4 * P["DENIED"],
+        "DENIED": 8 * P["DENIED"] + P["NEEDS_REVIEW"],
+        "NEEDS_REVIEW": 8 * P["NEEDS_REVIEW"] + 2 * (P["APPROVED"] + P["DENIED"]),
+    }
+    adj = max(ev, key=ev.get)
+    return adj, round(P[adj], 3)
+
+
+def apply_graybox_delegation(results, evidences):
+    """Re-decide delegated cases with the gray-zone model. Field extraction
+    always stays with the rule engine."""
+    delegated = [i for i, (_, record, bucket) in enumerate(results)
                  if bucket in DELEGATED_BUCKETS]
     if not delegated:
         return
     try:
-        from hybrid.decision import DecisionEngine
-        from hybrid.fields import extract_fields as hybrid_extract_fields
-        engine = DecisionEngine()
+        import joblib
+        import numpy as np
+        bundle = joblib.load(Path(__file__).parent / "models/graybox.joblib")
     except Exception:
         return
-    paths = [pdf for _, pdf in delegated]
-    with ProcessPoolExecutor(max_workers=workers) as pool:
-        hybrid_evidence = list(pool.map(_hybrid_worker, paths, chunksize=2))
-    for (i, _), evidence in zip(delegated, hybrid_evidence):
-        if not evidence:
-            continue
-        try:
-            record = hybrid_extract_fields(evidence["case_id"],
-                                           evidence["pages"])
-            record = engine.correct_record(record, evidence["pages"])
-            decision = engine.decide(record, evidence["pages"])
-            results[i][1]["adjudication"] = decision.adjudication
-            results[i][1]["confidence"] = decision.confidence
-        except Exception:
-            continue
+    model, classes = bundle["model"], list(bundle["classes"])
+    try:
+        X = np.array([graybox_vector(evidences[i]) for i in delegated])
+        probs = model.predict_proba(X)
+    except Exception:
+        return
+    for i, p in zip(delegated, probs):
+        adj, conf = graybox_decide(p, classes)
+        results[i][1]["adjudication"] = adj
+        results[i][1]["confidence"] = conf
 
 
 def main(input_dir, output_path):
@@ -1396,7 +1442,7 @@ def main(input_dir, output_path):
             bucket = "error"
         results.append([pdf, record, bucket])
 
-    apply_hybrid_delegation(results, workers)
+    apply_graybox_delegation(results, evidences)
 
     with open(out, "w") as f:
         for _, record, _ in results:
