@@ -1314,6 +1314,51 @@ def _worker(pdf_path):
                 "injection": False, "hidden": [], "failed": True}
 
 
+# Buckets where the rule engine's measured dev-split accuracy is too low to
+# trust; these cases are delegated to the hybrid statistical engine, which
+# generalizes better in that gray zone (ensemble validated on a train holdout).
+DELEGATED_BUCKETS = {"clean_strong", "clean_weak", "damaged_packet",
+                     "sponsor_blank"}
+
+
+def _hybrid_worker(pdf_path):
+    from hybrid.pdf import safe_extract_pdf
+    try:
+        return safe_extract_pdf(Path(pdf_path))
+    except Exception:
+        return None
+
+
+def apply_hybrid_delegation(results, workers):
+    """Override adjudication/confidence on delegated cases with the hybrid
+    ML engine's decision. Field extraction stays with the rule engine."""
+    delegated = [(i, pdf) for i, (pdf, record, bucket) in enumerate(results)
+                 if bucket in DELEGATED_BUCKETS]
+    if not delegated:
+        return
+    try:
+        from hybrid.decision import DecisionEngine
+        from hybrid.fields import extract_fields as hybrid_extract_fields
+        engine = DecisionEngine()
+    except Exception:
+        return
+    paths = [pdf for _, pdf in delegated]
+    with ProcessPoolExecutor(max_workers=workers) as pool:
+        hybrid_evidence = list(pool.map(_hybrid_worker, paths, chunksize=2))
+    for (i, _), evidence in zip(delegated, hybrid_evidence):
+        if not evidence:
+            continue
+        try:
+            record = hybrid_extract_fields(evidence["case_id"],
+                                           evidence["pages"])
+            record = engine.correct_record(record, evidence["pages"])
+            decision = engine.decide(record, evidence["pages"])
+            results[i][1]["adjudication"] = decision.adjudication
+            results[i][1]["confidence"] = decision.confidence
+        except Exception:
+            continue
+
+
 def main(input_dir, output_path):
     pdfs = sorted(str(p) for p in Path(input_dir).glob("*.pdf"))
     out = Path(output_path)
@@ -1330,20 +1375,27 @@ def main(input_dir, output_path):
             dates.append(d)
     cutoff = batch_stale_cutoff(dates)
 
+    results = []
+    for pdf, evidence in zip(pdfs, evidences):
+        try:
+            record, bucket = build_record(evidence, cutoff)
+        except Exception:
+            record = {
+                "case_id": evidence["case_id"],
+                "applicant_name": "unknown", "species_code": "unknown",
+                "home_world": "unknown", "visa_class": "unknown",
+                "sponsor_id": "SPN-0000", "arrival_date": "2026-01-01",
+                "declared_purpose": "unknown", "risk_flags": "none",
+                "fee_status": "paid", "adjudication": "NEEDS_REVIEW",
+                "confidence": 0.4,
+            }
+            bucket = "error"
+        results.append([pdf, record, bucket])
+
+    apply_hybrid_delegation(results, workers)
+
     with open(out, "w") as f:
-        for evidence in evidences:
-            try:
-                record, _ = build_record(evidence, cutoff)
-            except Exception:
-                record = {
-                    "case_id": evidence["case_id"],
-                    "applicant_name": "unknown", "species_code": "unknown",
-                    "home_world": "unknown", "visa_class": "unknown",
-                    "sponsor_id": "SPN-0000", "arrival_date": "2026-01-01",
-                    "declared_purpose": "unknown", "risk_flags": "none",
-                    "fee_status": "paid", "adjudication": "NEEDS_REVIEW",
-                    "confidence": 0.4,
-                }
+        for _, record, _ in results:
             f.write(json.dumps(record) + "\n")
 
 

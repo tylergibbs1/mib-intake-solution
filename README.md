@@ -14,10 +14,11 @@ docker run --rm --network none \
   mib-submission /input /output/predictions.jsonl
 ```
 
-No network, no GPU, no API keys. Runtime dependencies: Python 3.12, PyMuPDF,
-Pillow, NumPy, tesseract-ocr. No ML model artifacts — the pipeline is
-classical CV + OCR + a rule engine derived from the public field manual and
-the public training labels.
+No network, no GPU, no API keys, no LLMs. Runtime dependencies: Python 3.12,
+PyMuPDF, Pillow, NumPy, OpenCV, scikit-learn, tesseract-ocr, poppler-utils.
+One small model artifact (`models/model.joblib`, 12 MB): classical
+scikit-learn models (char n-gram TF-IDF + Extra Trees + logistic calibration)
+trained only on the public training labels.
 
 ## Architecture
 
@@ -43,6 +44,12 @@ the public training labels.
 6. **Confidence**: per-decision-path accuracies measured on a held-out
    training split (smoothed), which directly minimizes the Brier calibration
    penalty.
+7. **Hybrid gray-zone delegation**: decision buckets where the rule engine
+   measures poorly on the held-out split (clean-looking and heavily damaged
+   packets) are re-decided by a statistical engine (`hybrid/` package:
+   char n-gram + Extra Trees blend with guardrails and a logistic
+   correctness model). Fields always come from the rule engine; only
+   adjudication and confidence are delegated.
 
 See `MEMO.md` in the submission folder for design rationale and failure-mode
 analysis.
