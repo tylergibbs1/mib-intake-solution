@@ -15,8 +15,10 @@ from pathlib import Path
 
 import solution
 
+import os
+
 ROOT = Path("/Users/tylergibbs/Projects/8090chalfable/mib-doc-challenge")
-TRAIN = ROOT / "data/train"
+TRAIN = Path(os.environ.get("MIB_TRAIN_DIR", str(ROOT / "data/train")))
 LABELS = ROOT / "data/train_labels.csv"
 import os
 
