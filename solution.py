@@ -982,6 +982,10 @@ def resolve_fields(evidence):
             v, s = val[0], val[1]
             if v in (None, "", "__BLANK__"):
                 continue
+            if f == "species_match":
+                # the biometric slip's species reading corroborates species_code
+                votes.setdefault("species_code", []).append(
+                    (v, s * 0.9 * (1 + 0.15 * weight), page.get("doc_type")))
             score = s * (1 + 0.15 * weight)
             if f in VOTED_FIELDS and s < 2.5:
                 votes.setdefault(f, []).append((v, score, page.get("doc_type")))
