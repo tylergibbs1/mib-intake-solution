@@ -59,19 +59,21 @@ Laplace-smoothed, with finer buckets where behavior differs (text vs scanned
 note findings; clean packets with strong vs weak field coverage). This is the
 Brier-optimal constant per bucket.
 
-**7. Hybrid delegation for the gray zone.** The rule engine knows its own
-weak spots: buckets whose measured dev-split accuracy is below ~65%
-(clean-looking packets and heavily damaged packets, where denial evidence is
-frequently invisible). Exactly those cases are delegated to a second engine —
-a character n-gram text model plus an Extra Trees model over the structured
-record, blended and wrapped in deterministic guardrails, with a logistic
-second-stage model predicting decision correctness for calibrated confidence
-(package `hybrid/`, model `models/model.joblib`, 12 MB — my earlier
-standalone entry to this challenge). Field extraction always stays with the
-rule engine; only adjudication and confidence are delegated. On a 70/30
-train split (both engines fitted/tuned on the 70 only), the ensemble scored
-higher than either engine alone and cut catastrophic false approvals from 18
-to 3 on the 300-case holdout.
+**7. Gray-zone delegation.** The rule engine knows its own weak spots:
+buckets whose measured dev-split accuracy is below ~65% (clean-looking
+packets and heavily damaged packets, where denial evidence is frequently
+invisible). Exactly those cases are re-decided by a small Extra Trees model
+(`models/graybox.joblib`, ~5 MB) over the rule engine's own resolved fields
+plus damage/stamp/injection features, with the final label chosen by
+expected value under the challenge scoring matrix rather than argmax — the
+scorer's asymmetric payoffs (false approvals cost −4) make that distinction
+matter. Field extraction always stays with the rule engine; only
+adjudication and confidence are delegated. Alternatives evaluated on a 70/30
+train split (everything fitted/tuned on the 70 only): rules-only 119.0,
+delegation to a heavier standalone OCR+ML engine 119.4, this design 120.0 on
+the untouched 300-case holdout, with catastrophic false approvals cut from
+18 to 5. A hybrid-veto variant reached 2 false approvals but cost 1.8 total
+points, so it was rejected on the primary metric.
 
 ## Deliberate non-choices
 

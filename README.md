@@ -15,10 +15,10 @@ docker run --rm --network none \
 ```
 
 No network, no GPU, no API keys, no LLMs. Runtime dependencies: Python 3.12,
-PyMuPDF, Pillow, NumPy, OpenCV, scikit-learn, tesseract-ocr, poppler-utils.
-One small model artifact (`models/model.joblib`, 12 MB): classical
-scikit-learn models (char n-gram TF-IDF + Extra Trees + logistic calibration)
-trained only on the public training labels.
+PyMuPDF, Pillow, NumPy, scikit-learn, tesseract-ocr. One small model
+artifact (`models/graybox.joblib`, ~5 MB): an Extra Trees classifier over
+the rule engine's resolved fields, trained only on the public training
+labels (training script: `graybox_train.py`).
 
 ## Architecture
 
@@ -44,12 +44,12 @@ trained only on the public training labels.
 6. **Confidence**: per-decision-path accuracies measured on a held-out
    training split (smoothed), which directly minimizes the Brier calibration
    penalty.
-7. **Hybrid gray-zone delegation**: decision buckets where the rule engine
-   measures poorly on the held-out split (clean-looking and heavily damaged
-   packets) are re-decided by a statistical engine (`hybrid/` package:
-   char n-gram + Extra Trees blend with guardrails and a logistic
-   correctness model). Fields always come from the rule engine; only
-   adjudication and confidence are delegated.
+7. **Gray-zone delegation**: decision buckets where the rule engine measures
+   poorly on the held-out split (clean-looking and heavily damaged packets)
+   are re-decided by an Extra Trees model over the rule engine's resolved
+   fields and damage features, with the label chosen by expected value under
+   the challenge scoring matrix. Fields always come from the rule engine;
+   only adjudication and confidence are delegated.
 
 See `MEMO.md` in the submission folder for design rationale and failure-mode
 analysis.
