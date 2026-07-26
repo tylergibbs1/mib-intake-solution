@@ -23,7 +23,7 @@ for line in open(f'{BASE}/cache/predictions.jsonl'):
     mine[r['case_id']] = r
 truth = sorted(r['case_id'] for r in csv.DictReader(open(f'{BASE}/mib-doc-challenge/data/train_labels.csv')))
 hold = [cid for i, cid in enumerate(truth) if i % 10 >= 7]
-bundle = joblib.load(f'{BASE}/solution/models/graybox.joblib')
+bundle = joblib.load(f'{BASE}/solution/models/graybox_dev.joblib')
 model, classes = bundle['model'], list(bundle['classes'])
 out = []
 for cid in hold:
