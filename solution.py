@@ -402,6 +402,14 @@ def date_candidates(text):
                 d, score = "0" + d[-1] if d[-1] != "0" else "10", score * 0.6
             if not 1 <= int(d) <= 31:
                 continue
+        # calendar-validate; clamp repaired days that overflow the month
+        import datetime
+        try:
+            datetime.date(int(y), int(mo), int(d))
+        except ValueError:
+            last = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30, 7: 31, 8: 31,
+                    9: 30, 10: 31, 11: 30, 12: 31}[int(mo)]
+            d, score = str(last), score * 0.6
         out.append((f"{y}-{mo.zfill(2)}-{d.zfill(2)}", score))
     return out
 
