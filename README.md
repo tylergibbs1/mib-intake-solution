@@ -14,6 +14,13 @@ docker run --rm --network none \
   mib-submission /input /output/predictions.jsonl
 ```
 
+Without Docker (needs `tesseract` on `PATH`):
+
+```bash
+pip install -r requirements.txt
+python3 solution.py /path/to/pdfs /path/to/out/predictions.jsonl
+```
+
 No network, no GPU, no API keys, no LLMs. Runtime dependencies: Python 3.12,
 PyMuPDF, Pillow, NumPy, scikit-learn, tesseract-ocr. One small model
 artifact (`models/graybox.joblib`, ~5 MB): an Extra Trees classifier over
@@ -51,5 +58,17 @@ labels (training script: `graybox_train.py`).
    the challenge scoring matrix. Fields always come from the rule engine;
    only adjudication and confidence are delegated.
 
-See `MEMO.md` in the submission folder for design rationale and failure-mode
-analysis.
+See [MEMO.md](MEMO.md) for design rationale and failure-mode analysis.
+
+## Development
+
+These harnesses were used to tune the pipeline against the challenge's training data. They
+point at absolute paths on the author's machine (the training set, label CSV, and evidence
+cache), so adjust those before running them elsewhere.
+
+- `dev_run.py extract [N] | predict | analyze | score [split]`: cached extraction over the
+  training set, prediction, residual analysis, and scoring.
+- `graybox_train.py`: trains the gray-zone Extra Trees model on the dev split; `--all` fits
+  the shipped `models/graybox.joblib` on all 1000 training cases.
+- `exp_run.sh`, `exp_ocr.sh`: experiment runners that print `METRIC` lines (rules-only dev
+  score, holdout score, and an OCR re-extraction check).
